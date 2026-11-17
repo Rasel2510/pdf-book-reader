@@ -78,6 +78,56 @@ final class Highlight {
   final String? annotationMarker;
 }
 
+/// A saved word as a flashcard: the word of any book, with its meaning.
+final class ReviewWord {
+  const ReviewWord({
+    required this.id,
+    required this.word,
+    required this.meaning,
+    required this.page,
+    required this.box,
+    required this.bookTitle,
+  });
+
+  factory ReviewWord.fromMap(Map<String, Object?> m) => ReviewWord(
+    id: m['id'] as int,
+    word: m['word'] as String,
+    meaning: m['meaning'] as String,
+    page: m['page'] as int,
+    box: m['box'] as int,
+    bookTitle: m['title'] as String,
+  );
+
+  final int id;
+  final String word;
+  final String meaning;
+  final int page;
+
+  /// How well the word is known, 0 (new or forgotten) upwards; see
+  /// `review_schedule.dart`.
+  final int box;
+  final String bookTitle;
+
+  ReviewWord inBox(int box) => ReviewWord(
+    id: id,
+    word: word,
+    meaning: meaning,
+    page: page,
+    box: box,
+    bookTitle: bookTitle,
+  );
+}
+
+/// Where the saved words stand: [due] can be reviewed now, [resting] come
+/// back later (the first of them at [nextDue], milliseconds since the
+/// epoch), [withoutMeaning] cannot be reviewed until they are looked up.
+typedef ReviewCounts = ({
+  int due,
+  int resting,
+  int withoutMeaning,
+  int? nextDue,
+});
+
 final class SavedWord {
   const SavedWord({
     required this.id,

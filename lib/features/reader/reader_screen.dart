@@ -85,6 +85,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   final _zoomLevel = ValueNotifier<double>(1);
   final _selected = ValueNotifier<String?>(null);
   final _highlightColor = ValueNotifier<Color>(highlightColors.first);
+
+  // The meaning of a single selected word, shown in the selection bar.
+  final _lookup = ValueNotifier<WordLookup?>(null);
+  final _meanings = <String, String>{}; // found this session, by word
+  Timer? _lookupTimer;
   Timer? _selectionClearTimer;
   String? _lastSelectionText;
   int? _lastSelectionPage;
@@ -181,6 +186,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _progressTimer?.cancel();
     _docTimer?.cancel();
     _selectionClearTimer?.cancel();
+    _lookupTimer?.cancel();
     _chromeTimer?.cancel();
     unawaited(_flushProgress());
     unawaited(_applyWakelock(false));
@@ -193,6 +199,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _zoomLevel.dispose();
     _selected.dispose();
     _highlightColor.dispose();
+    _lookup.dispose();
     _searchOpen.dispose();
     _chrome.dispose();
     _searchField.dispose();
@@ -618,12 +625,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           _selected.value = null;
           _lastSelectionText = null;
           _lastSelectionPage = null;
+          _lookUp(null);
         });
       }
       return;
     }
 
     _selected.value = value;
+    _lookUp(value);
     _lastSelectionText = value;
     final lines = _viewerKey.currentState?.getSelectedTextLines();
     _lastSelectionPage = lines?.isNotEmpty == true
@@ -637,7 +646,44 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _selected.value = null;
     _lastSelectionText = null;
     _lastSelectionPage = null;
+    _lookUp(null);
     _controller.clearSelection();
+  }
+
+  /// A single selected word gets its meaning shown in the selection bar by
+  /// itself: no button to press. (More than one word: nothing is shown.)
+  void _lookUp(String? selected) {
+    final word = selected == null
+        ? null
+        : DictionaryService.lookupWord(selected);
+    if (word == null) {
+      _lookupTimer?.cancel();
+      _lookup.value = null;
+      return;
+    }
+    // The viewer reports a selection more than once. The same word again
+    // must leave the lookup that is under way alone.
+    if (_lookup.value?.word == word) return;
+    _lookupTimer?.cancel();
+
+    final key = word.toLowerCase();
+    final known = _meanings[key];
+    if (known != null) {
+      _lookup.value = (word: word, meaning: known, loading: false);
+      return;
+    }
+
+    _lookup.value = (word: word, meaning: null, loading: true);
+    // The selection changes while its handles are dragged: ask once it
+    // rests.
+    _lookupTimer = Timer(const Duration(milliseconds: 350), () async {
+      final found = await _dictionary.lookup(word);
+      if (!mounted) return;
+      if (found != null) _meanings[key] = found;
+      if (_lookup.value?.word == word) {
+        _lookup.value = (word: word, meaning: found, loading: false);
+      }
+    });
   }
 
   void _onAnnotationAdded(Annotation annotation) {
@@ -1001,15 +1047,23 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   /// Saves the selected word (or [word]); the meaning is looked up in the
   /// background when it is a single word and the device is online.
   Future<void> _saveWord({String? word, String? meaning}) async {
-    final text = word ?? _selected.value;
-    if (text == null) return;
+    final selected = word ?? _selected.value;
+    if (selected == null) return;
+    // A single word is saved without the punctuation around it, and with
+    // the meaning the bar is already showing.
+    final single = DictionaryService.lookupWord(selected);
+    final text = single ?? selected;
+    final shown = _lookup.value;
     final page = _page;
     _clearSelection();
     _toast('Word saved');
 
     try {
       final id = await _repo.addWord(_book.id, page, text);
-      var found = meaning;
+      var found =
+          meaning ??
+          (single != null ? _meanings[single.toLowerCase()] : null) ??
+          (shown?.word == single ? shown?.meaning : null);
       if (found == null && DictionaryService.canLookUp(text)) {
         found = await _dictionary.lookup(text);
       }
@@ -1018,48 +1072,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       debugPrint('Could not save word: $error\n$stackTrace');
       _toast('Could not save the word.');
     }
-  }
-
-  /// Shows the meaning of the selected word, with a shortcut to save it.
-  Future<void> _define() async {
-    final selected = _selected.value;
-    if (selected == null) return;
-    final word = DictionaryService.lookupWord(selected);
-    if (word == null) return;
-    _clearSelection();
-    _toast('Looking up “$word”…');
-
-    final meaning = await _dictionary.lookup(word);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-    final save = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.card,
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          side: BorderSide(color: AppColors.ink, width: 2),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        title: Text(word),
-        content: Text(
-          meaning ?? 'No meaning found. Check your internet connection.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('CLOSE'),
-          ),
-          if (meaning != null)
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('SAVE WORD'),
-            ),
-        ],
-      ),
-    );
-    if (save ?? false) unawaited(_saveWord(word: word, meaning: meaning));
   }
 
   Future<void> _saveAnnotatedPdf() async {
@@ -1493,15 +1505,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               valueListenable: _selected,
               builder: (context, selected, _) => selected == null
                   ? const SizedBox.shrink()
-                  : ValueListenableBuilder<Color>(
-                      valueListenable: _highlightColor,
-                      builder: (context, color, _) => SelectionBar(
-                        color: color,
+                  : ListenableBuilder(
+                      listenable: Listenable.merge([_highlightColor, _lookup]),
+                      builder: (context, _) => SelectionBar(
+                        color: _highlightColor.value,
                         onColor: (c) => _highlightColor.value = c,
-                        canDefine: DictionaryService.canLookUp(selected),
+                        lookup: _lookup.value,
                         onHighlight: _highlight,
                         onSaveWord: _saveWord,
-                        onDefine: _define,
                         onCopy: _copySelection,
                         onClose: _clearSelection,
                       ),

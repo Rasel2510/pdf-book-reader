@@ -5,17 +5,20 @@ import '../../core/theme/app_theme.dart';
 import '../../core/theme/highlight_colors.dart';
 import '../../core/widgets/retro_box.dart';
 
-/// Shown while text is selected: pick a color, highlight, save the word,
-/// or look up its meaning.
+/// The meaning of the one word that is selected: being looked up
+/// ([loading]), found ([meaning]) or not found ([meaning] is null).
+typedef WordLookup = ({String word, String? meaning, bool loading});
+
+/// Shown while text is selected: pick a color, highlight, save the word.
+/// When the selection is a single word, its meaning is shown on top.
 class SelectionBar extends StatelessWidget {
   const SelectionBar({
     super.key,
     required this.color,
     required this.onColor,
-    required this.canDefine,
+    required this.lookup,
     required this.onHighlight,
     required this.onSaveWord,
-    required this.onDefine,
     required this.onCopy,
     required this.onClose,
   });
@@ -23,11 +26,11 @@ class SelectionBar extends StatelessWidget {
   final Color color;
   final ValueChanged<Color> onColor;
 
-  /// Only a single word can be looked up.
-  final bool canDefine;
+  /// Null when more than one word is selected (only single words are
+  /// looked up).
+  final WordLookup? lookup;
   final VoidCallback onHighlight;
   final VoidCallback onSaveWord;
-  final VoidCallback onDefine;
   final VoidCallback onCopy;
   final VoidCallback onClose;
 
@@ -45,6 +48,7 @@ class SelectionBar extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (lookup case final lookup?) _Meaning(lookup: lookup),
               Row(
                 children: [
                   for (final c in highlightColors)
@@ -89,22 +93,57 @@ class SelectionBar extends StatelessWidget {
                         onPressed: onSaveWord,
                       ),
                     ),
-                    if (canDefine) ...[
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _BarButton(
-                          label: 'Define',
-                          icon: Icons.menu_book,
-                          color: AppColors.card,
-                          onPressed: onDefine,
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The selected word with its meaning, above the buttons.
+class _Meaning extends StatelessWidget {
+  const _Meaning({required this.lookup});
+
+  final WordLookup lookup;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final meaning = lookup.meaning;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 6, 12, 6),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              lookup.word,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: text.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              lookup.loading
+                  ? 'Looking up…'
+                  : meaning ??
+                        'No meaning found. Check your internet connection.',
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+              style: text.bodyMedium?.copyWith(
+                color: meaning == null
+                    ? AppColors.ink.withValues(alpha: 0.6)
+                    : null,
+              ),
+            ),
+          ],
         ),
       ),
     );

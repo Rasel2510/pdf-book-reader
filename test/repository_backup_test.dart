@@ -84,6 +84,56 @@ void main() {
     expect(await repo.bookmarkPages(original.id), {12, 68});
   });
 
+  test('only words that have a meaning and are due are reviewed', () async {
+    final repo = Repository();
+    await repo.addBook('Review Book', '/new/device/books/333.pdf', 50);
+    final book = (await repo.books()).firstWhere(
+      (b) => b.filePath.endsWith('333.pdf'),
+    );
+    const now = 2000000000000;
+    final before = await repo.reviewCounts(now);
+
+    final dueNow = await repo.addWord(book.id, 1, 'duenow');
+    await repo.setWordMeaning(dueNow, 'asked today');
+    final resting = await repo.addWord(book.id, 2, 'resting');
+    await repo.setWordMeaning(resting, 'asked later');
+    await repo.setWordReview(resting, box: 2, due: now + 5000);
+    await repo.addWord(book.id, 3, 'unexplained');
+
+    final counts = await repo.reviewCounts(now);
+    expect(counts.due, before.due + 1);
+    expect(counts.resting, before.resting + 1);
+    expect(counts.withoutMeaning, before.withoutMeaning + 1);
+    expect(counts.nextDue, now + 5000);
+
+    final asked = await repo.wordsToReview(now, limit: 500);
+    final mine = asked.where((w) => w.bookTitle == 'Review Book').toList();
+    expect(mine.map((w) => w.word), ['duenow']);
+    expect(mine.single.meaning, 'asked today');
+    expect(mine.single.box, 0);
+    expect(mine.single.page, 1);
+
+    // Once it is due, the resting word is asked too, in its box.
+    final later = await repo.wordsToReview(now + 5000, limit: 500);
+    final then = later.where((w) => w.bookTitle == 'Review Book').toList();
+    expect(then.map((w) => w.word).toSet(), {'duenow', 'resting'});
+    expect(then.firstWhere((w) => w.word == 'resting').box, 2);
+
+    // A backup carries how well each word is known.
+    final exported = (await repo.exportLibrary()).firstWhere(
+      (b) => b.path.endsWith('333.pdf'),
+    );
+    await repo.importBook(exported.data, '/new/device/books/444.pdf');
+    final copy = (await repo.books()).firstWhere(
+      (b) => b.filePath.endsWith('444.pdf'),
+    );
+    final copied = (await repo.wordsToReview(now + 5000, limit: 500))
+        .where((w) => w.bookTitle == 'Review Book')
+        .where((w) => w.word == 'resting');
+    expect(copied.map((w) => w.box), [2, 2]);
+    expect(await repo.words(copy.id), hasLength(3));
+  });
+
   test('a damaged entry is left out, the rest of the book is kept', () async {
     final repo = Repository();
     final before = (await repo.books()).length;

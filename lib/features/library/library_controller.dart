@@ -70,15 +70,50 @@ class LibraryController extends AsyncNotifier<List<Book>> {
 
   /// Copies the picked PDF into app storage, builds its cover, registers it.
   Future<void> add(PlatformFile file) async {
+    await _busy(
+      () => _import(name: file.name, path: file.path, bytes: file.readAsBytes),
+    );
+  }
+
+  /// Puts a PDF that another app handed over ("Open with") on the shelf and
+  /// returns its book, ready to open. Opening the same file again must not
+  /// fill the shelf with copies: a book with the same title is taken to be
+  /// that book and is returned as it is.
+  Future<Book?> addIncoming(String path, String name) async {
+    final title = _titleFor(name);
+    for (final book in await future) {
+      if (book.title == title) return book;
+    }
+
+    final target = await _busy(() => _import(name: name, path: path));
+    for (final book in state.value ?? const <Book>[]) {
+      if (book.filePath == target) return book;
+    }
+    return null;
+  }
+
+  /// Shows the progress bar on the shelf while [work] runs.
+  Future<T> _busy<T>(Future<T> Function() work) async {
     ref.read(importingProvider.notifier).set(true);
     try {
-      await _add(file);
+      return await work();
     } finally {
       ref.read(importingProvider.notifier).set(false);
     }
   }
 
-  Future<void> _add(PlatformFile file) async {
+  String _titleFor(String fileName) {
+    final title = cleanBookTitle(p.basenameWithoutExtension(fileName));
+    return title.isEmpty ? 'Untitled' : title;
+  }
+
+  /// Puts the PDF at [path] (or made of [bytes]) on the shelf and returns
+  /// where its copy was stored.
+  Future<String> _import({
+    required String name,
+    String? path,
+    Future<List<int>> Function()? bytes,
+  }) async {
     final docs = await getApplicationDocumentsDirectory();
     final dir = await Directory(
       p.join(docs.path, 'books'),
@@ -91,19 +126,19 @@ class LibraryController extends AsyncNotifier<List<Book>> {
     final cover = '${p.withoutExtension(target)}.jpg';
 
     try {
-      final source = file.path;
-      if (source != null) {
-        await File(source).copy(target);
+      if (path != null) {
+        await File(path).copy(target);
+      } else if (bytes != null) {
+        await File(target).writeAsBytes(await bytes());
       } else {
-        await File(target).writeAsBytes(await file.readAsBytes());
+        throw const NotAPdfException();
       }
       if (!await _looksLikePdf(target)) throw const NotAPdfException();
 
       // 0 pages: the cover could not be drawn (e.g. a locked PDF). The
       // reader may still open it, and it fills in the page count then.
       final pageCount = await createCover(pdfPath: target, coverPath: cover);
-      final name = cleanBookTitle(p.basenameWithoutExtension(file.name));
-      await _repo.addBook(name.isEmpty ? 'Untitled' : name, target, pageCount);
+      await _repo.addBook(_titleFor(name), target, pageCount);
     } catch (_) {
       // Leave nothing behind for a book that did not reach the shelf.
       for (final path in [target, cover]) {
@@ -115,6 +150,7 @@ class LibraryController extends AsyncNotifier<List<Book>> {
       rethrow;
     }
     await reload();
+    return target;
   }
 
   /// Every PDF has "%PDF" near its start.

@@ -171,6 +171,53 @@ class Repository {
     await (await _db).delete('words', where: 'id = ?', whereArgs: [id]);
   }
 
+  // Word review
+  /// Saved words (of every book) that have a meaning and are due at [now],
+  /// the longest-waiting first.
+  Future<List<ReviewWord>> wordsToReview(int now, {int limit = 30}) async {
+    final rows = await (await _db).rawQuery(
+      'SELECT w.id, w.word, w.meaning, w.page, w.box, b.title '
+      'FROM words w JOIN books b ON b.id = w.book_id '
+      "WHERE w.meaning IS NOT NULL AND w.meaning <> '' AND w.due <= ? "
+      'ORDER BY w.due, w.id LIMIT ?',
+      [now, limit],
+    );
+    return rows.map(ReviewWord.fromMap).toList();
+  }
+
+  Future<ReviewCounts> reviewCounts(int now) async {
+    // (No FILTER clause: older Android SQLite versions do not have it.)
+    const explained = "meaning IS NOT NULL AND meaning <> ''";
+    final row = (await (await _db).rawQuery(
+      'SELECT '
+      'SUM(CASE WHEN $explained AND due <= ? THEN 1 ELSE 0 END) AS due, '
+      'SUM(CASE WHEN $explained AND due > ? THEN 1 ELSE 0 END) AS resting, '
+      'SUM(CASE WHEN $explained THEN 0 ELSE 1 END) AS unexplained, '
+      'MIN(CASE WHEN $explained AND due > ? THEN due END) AS next_due '
+      'FROM words',
+      [now, now, now],
+    )).first;
+    return (
+      due: (row['due'] as int?) ?? 0,
+      resting: (row['resting'] as int?) ?? 0,
+      withoutMeaning: (row['unexplained'] as int?) ?? 0,
+      nextDue: row['next_due'] as int?,
+    );
+  }
+
+  Future<void> setWordReview(
+    int id, {
+    required int box,
+    required int due,
+  }) async {
+    await (await _db).update(
+      'words',
+      {'box': box, 'due': due},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   // Backup
   /// Every book with all that belongs to it, as plain values for a backup
   /// file. `path` is where its PDF is on this device; `data` names the file
@@ -214,6 +261,8 @@ class Repository {
             'word',
             'meaning',
             'created_at',
+            'box',
+            'due',
           ]),
           'reading': await rows('reading_log', ['day', 'pages', 'seconds']),
         },
@@ -280,6 +329,9 @@ class Repository {
           'word': word,
           'meaning': text(row['meaning']),
           'created_at': number(row['created_at'], _now()),
+          // Not in backups made before word review existed.
+          'box': number(row['box'], 0),
+          'due': number(row['due'], 0),
         });
       }
 

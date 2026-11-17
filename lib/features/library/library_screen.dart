@@ -11,13 +11,22 @@ import '../../core/widgets/retro_box.dart';
 import '../../data/models.dart';
 import '../notes/notes_screen.dart';
 import '../reader/reader_screen.dart';
+import '../review/review_screen.dart';
 import '../settings/reading_settings_sheet.dart';
 import '../stats/stats_screen.dart';
 import 'book_card.dart';
 import 'library_controller.dart';
 import 'library_sort.dart';
 
-enum _Menu { stats, sortRecent, sortTitle, sortProgress, backup, restore }
+enum _Menu {
+  review,
+  stats,
+  sortRecent,
+  sortTitle,
+  sortProgress,
+  backup,
+  restore,
+}
 
 class LibraryScreen extends ConsumerWidget {
   const LibraryScreen({super.key});
@@ -140,6 +149,7 @@ class LibraryScreen extends ConsumerWidget {
         builder: (_) => ReaderScreen(book: book, startPage: startPage),
       ),
     );
+    ref.invalidate(reviewDueProvider); // words may have been saved
   }
 
   /// Highlights, bookmarks and words of one book; tapping an item opens
@@ -171,6 +181,13 @@ class LibraryScreen extends ConsumerWidget {
   void _onMenu(BuildContext context, WidgetRef ref, _Menu item) {
     final sort = ref.read(librarySortProvider.notifier);
     switch (item) {
+      case _Menu.review:
+        unawaited(
+          Navigator.push<void>(
+            context,
+            MaterialPageRoute(builder: (_) => const ReviewScreen()),
+          ).whenComplete(() => ref.invalidate(reviewDueProvider)),
+        );
       case _Menu.stats:
         Navigator.push<void>(
           context,
@@ -231,6 +248,7 @@ class LibraryScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final books = ref.watch(libraryProvider);
     final sort = ref.watch(librarySortProvider);
+    ref.watch(reviewDueProvider); // kept fresh for the menu
     final text = Theme.of(context).textTheme;
     final count = books.value?.length ?? 0;
 
@@ -248,7 +266,12 @@ class LibraryScreen extends ConsumerWidget {
             onSelected: (item) => _onMenu(context, ref, item),
             itemBuilder: (_) {
               final sort = ref.read(librarySortProvider);
+              final due = ref.read(reviewDueProvider).value ?? 0;
               return [
+                PopupMenuItem(
+                  value: _Menu.review,
+                  child: Text(due > 0 ? 'Review words ($due)' : 'Review words'),
+                ),
                 const PopupMenuItem(
                   value: _Menu.stats,
                   child: Text('Reading stats'),

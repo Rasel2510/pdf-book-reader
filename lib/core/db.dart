@@ -25,7 +25,7 @@ abstract final class AppDb {
     final path = p.join(await getDatabasesPath(), 'reader.db');
     return openDatabase(
       path,
-      version: 4,
+      version: 5,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onUpgrade: (db, oldVersion, _) async {
         if (oldVersion < 2) await _createIndexes(db);
@@ -37,6 +37,15 @@ abstract final class AppDb {
         if (oldVersion < 4) {
           await db.execute(
             'ALTER TABLE highlights ADD COLUMN annotation_marker TEXT',
+          );
+        }
+        if (oldVersion < 5) {
+          // Word review: how well a word is known and when it is due again.
+          await db.execute(
+            'ALTER TABLE words ADD COLUMN box INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.execute(
+            'ALTER TABLE words ADD COLUMN due INTEGER NOT NULL DEFAULT 0',
           );
         }
       },
@@ -74,7 +83,9 @@ abstract final class AppDb {
             page INTEGER NOT NULL,
             word TEXT NOT NULL,
             meaning TEXT,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            box INTEGER NOT NULL DEFAULT 0,
+            due INTEGER NOT NULL DEFAULT 0
           )''');
         await _createIndexes(db);
         await _createReadingLog(db);
